@@ -29,6 +29,9 @@ static NSString * kSDCGImageDestinationRequestedFileSize = @"kCGImageDestination
 @implementation SDImageIOCoderFrame
 @end
 
+static BOOL willTerminated_;
+static NSLock *terminatedLock_;
+
 @implementation SDImageIOAnimatedCoder {
     size_t _width, _height;
     CGImageSourceRef _imageSource;
@@ -40,6 +43,39 @@ static NSString * kSDCGImageDestinationRequestedFileSize = @"kCGImageDestination
     BOOL _finished;
     BOOL _preserveAspectRatio;
     CGSize _thumbnailSize;
+}
+
++ (void)initialize {
+    if (self == SDImageIOAnimatedCoder.class) {
+        willTerminated_ = NO;
+        terminatedLock_ = [[NSLock alloc] init];
+#if SD_UIKIT
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(applicationWillTerminate:)
+                                                     name:UIApplicationWillTerminateNotification
+                                                   object:nil];
+
+#endif
+#if SD_MAC
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(applicationWillTerminate:)
+                                                     name:NSApplicationWillTerminateNotification
+                                                   object:nil];
+#endif
+    }
+}
+
++ (void)applicationWillTerminate:(NSNotification *)note {
+    [terminatedLock_ lock];
+    willTerminated_ = YES;
+    [terminatedLock_ unlock];
+}
+
++ (BOOL)willTerminated {
+    [terminatedLock_ lock];
+    BOOL willTerminated = willTerminated_;
+    [terminatedLock_ unlock];
+    return willTerminated;
 }
 
 - (void)dealloc
@@ -158,6 +194,10 @@ static NSString * kSDCGImageDestinationRequestedFileSize = @"kCGImageDestination
 }
 
 + (UIImage *)createFrameAtIndex:(NSUInteger)index source:(CGImageSourceRef)source scale:(CGFloat)scale preserveAspectRatio:(BOOL)preserveAspectRatio thumbnailSize:(CGSize)thumbnailSize options:(NSDictionary *)options {
+    // Earily return when application will be terminated.
+    if (self.willTerminated) {
+        return nil;
+    }
     // Some options need to pass to `CGImageSourceCopyPropertiesAtIndex` before `CGImageSourceCreateImageAtIndex`, or ImageIO will ignore them because they parse once :)
     // Parse the image properties
     NSDictionary *properties = (__bridge_transfer NSDictionary *)CGImageSourceCopyPropertiesAtIndex(source, index, (__bridge CFDictionaryRef)options);
